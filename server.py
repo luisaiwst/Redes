@@ -1,103 +1,57 @@
 import socket
-import threading
 import datetime
 
 clientes = {}
 
-SALAS = {
-    "1": "geral",
-    "2": "games"
-}
+SALAS = {"1": "geral", "2": "games"}
 
 def horario():
     return datetime.datetime.now().strftime("%H:%M")
 
-def handle_client(client_socket):
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.bind(("127.0.0.1", 5005))
 
-    msg = client_socket.recv(1024).decode()
-    nome = msg.split(":")[1]
+print("Servidor UDP rodando")
 
-    clientes[client_socket] = {
-        "nome": nome,
-        "sala": None
-    }
+while True:
+    data_raw, addr = s.recvfrom(1024)
+    data = data_raw.decode()
 
-    print(f"[{horario()}] {nome} conectou")
+    if data.startswith("LOGIN:"):
+        nome = data.split(":")[1]
+        clientes[addr] = {"nome": nome, "sala": None}
+        print(f"[{horario()}] {nome} {addr} conectou")
+        continue
 
-    while True:
-        try:
-            data = client_socket.recv(1024).decode()
+    if addr not in clientes:
+        continue
 
-            if not data:
-                nome = clientes[client_socket]["nome"]
-                del clientes[client_socket]
-                print(f"[{horario()}] {nome} desconectou")
-                client_socket.close()
-                break
+    nome = clientes[addr]["nome"]
 
-            if data == "/usuarios":
-                lista = ""
-                for c in clientes.values():
-                    lista += c["nome"] + " "
-                client_socket.send(f"[{horario()}] Online: {lista}".encode())
+    if data == "/usuarios":
+        lista = " ".join([c["nome"] for c in clientes.values()])
+        s.sendto(f"[{horario()}] Online: {lista}".encode(), addr)
 
-            elif data == "/salas":
-                client_socket.send(f"Salas: {', '.join(SALAS.values())}".encode())
+    elif data == "/salas":
+        s.sendto(f"Salas: {', '.join(SALAS.values())}".encode(), addr)
 
-            elif data == "/ajuda":
-                client_socket.send("/usuarios /sala 1 /sala 2 /privado".encode())
+    elif data in SALAS:
+        clientes[addr]["sala"] = SALAS[data]
+        s.sendto(f"Entrou em {SALAS[data]}".encode(), addr)
 
-            elif data in SALAS:
-                clientes[client_socket]["sala"] = SALAS[data]
-                client_socket.send(f"Entrou em {SALAS[data]}".encode())
+    elif data.startswith("/privado"):
+        partes = data.split(" ")
+        destino = partes[1]
+        mensagem = " ".join(partes[2:])
+        for c_addr, c_info in clientes.items():
+            if c_info["nome"] == destino:
+                s.sendto(f"[{horario()}] [P] {nome}: {mensagem}".encode(), c_addr)
 
-            elif data.startswith("/privado"):
-                partes = data.split(" ")
-                destino = partes[1]
-
-                mensagem = ""
-                for i in range(2, len(partes)):
-                    mensagem += partes[i] + " "
-
-                for c in clientes:
-                    if clientes[c]["nome"] == destino:
-                        c.send(f"[{horario()}] [P] {nome}: {mensagem}".encode())
-
-            else:
-                nome = clientes[client_socket]["nome"]
-                sala = clientes[client_socket]["sala"]
-
-                if sala is None:
-                    msg = f"[{horario()}] {nome}: {data}"
-
-                    print(msg)
-
-                    for c in clientes:
-                        c.send(msg.encode())
-
-                else:
-                    msg = f"[{horario()}] [{sala}] {nome}: {data}"
-
-                    print(msg)
-
-                    for c in clientes:
-                        if clientes[c]["sala"] == sala:
-                            c.send(msg.encode())
-
-        except:
-            break
-
-
-def start_server():
-    s = socket.socket()
-    s.bind(("127.0.0.1", 5005))
-    s.listen()
-
-    print("Servidor rodando")
-
-    while True:
-        c, addr = s.accept()
-        threading.Thread(target=handle_client, args=(c,), daemon=True).start()
-
-
-start_server()
+    else:
+        sala = clientes[addr]["sala"]
+        msg = f"[{horario()}] [{'Geral' if sala is None else sala}] {nome}: {data}"
+        print(msg)
+        
+        for c_addr, c_info in clientes.items():
+            if c_info["sala"] == sala:
+                s.sendto(msg.encode(), c_addr)
